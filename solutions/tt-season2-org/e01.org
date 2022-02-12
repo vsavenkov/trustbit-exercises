@@ -1,0 +1,218 @@
+#+TITLE: Solutions to the Transport Tycoon Exercise 1
+
+* Python solutions (using libraries)
+
+The power of python is its libraries, so we try to find the ones that lead to the most concise and readable code.
+
+Setup (shell command):
+#+begin_src sh :results silent
+conda create -q -n katas -c conda-forge python=3.9 scipy>=1.8.0
+#+end_src
+
+The python code below is split into cells to show values of intermediate variables. We use Orgmode's code blocks, so the output instructions might look a little strange if you are used to the more straightforward Jupyter's way of displaying tables. (The benefit of Org files is pure text format and the ability to mix languages, not to mention tons of great features of Orgmode itself, and,... well, Org is just too addictive :-).
+
+In most cases we use tabular output, where ~None~ generates a horizontal line and marks table header (Github does not render Org tables without headers). Tables can be obtained in many ways: e.g.,  from python lists directly, or from strings that roughly correspond to Python lists. You will see both ways below.
+
+** Scipy
+
+Scipy's csgraph module computes not a single shortest path but all-pairs shortest path matrix. This clearly affects performance for large graphs, but in our exercise the graph is small :-). The only tricky part of using Scipy is finding the correct Numpy function for transforming the input and reading the result.
+
+#+begin_src python :kernel katas :session _ :results silent
+import os, io
+import numpy as np
+import scipy.sparse as ss
+
+csv = "s02e01_map.csv"
+dl = ","
+if not os.path.isfile(csv):
+    dl = None #default for np.genfromtxt is whitespace
+    csv = io.StringIO("""
+            A           	B           	km
+            Cogburg     	Copperhold  	1047
+            Leverstorm  	Irondale    	673
+            Cogburg     	Steamdrift  	1269
+            Copperhold  	Irondale    	345
+            Copperhold  	Leverstorm  	569
+            Leverstorm  	Gizbourne   	866
+            Rustport    	Cogburg     	1421
+            Rustport    	Steamdrift  	1947
+            Rustport    	Gizbourne   	1220
+            Irondale    	Gizbourne   	526
+            Cogburg     	Irondale    	1034
+            Rustport        Irondale    	1302
+            Isolated        Endpoint    	569
+""")
+
+# data is array of tuples
+data = np.genfromtxt(csv, names=True, encoding="latin1", dtype=None, delimiter=dl)
+
+# column_stack makes a 2d array E_s
+E_s = np.column_stack((data["A"],data["B"]))
+W = data["km"] #edge weights
+
+#convert strings into integers for scipy
+V,E_flat=np.unique(E_s,return_inverse=True)
+#+end_src
+
+We got a list of vertices ~V~ and a 1d array of edges ~E_flat~. This is how they look like:
+#+begin_src python :session _
+#one way to produce an org table in python source block is via string
+f'''(
+(Variable, Value)
+hline
+(V, {V})
+(E_flat, {E_flat})
+)'''
+#+end_src
+
+#+RESULTS:
+| Variable | Value                                                                                    |
+|----------+------------------------------------------------------------------------------------------|
+| V        | (Cogburg Copperhold Endpoint Gizbourne Irondale Isolated Leverstorm Rustport Steamdrift) |
+| E_flat   | (0 1 6 4 0 8 1 4 1 6 6 3 7 0 7 8 7 3 4 3 0 4 7 4 5 2)                                    |
+
+Let's make E_flat 2d again using ~reshape~, the first ~-1~ means "use as many rows as needed".
+
+#+begin_src python :session _
+E=E_flat.reshape(-1,2)
+
+#output (the first 3 rows):
+[("from","to"), None] + E[:3].astype('str').tolist()
+#+end_src
+
+#+RESULTS:
+| from | to |
+|------+----|
+|    0 |  1 |
+|    6 |  4 |
+|    0 |  8 |
+
+Also, we define a helper function to transform names into integers easily
+#+begin_src python :session _
+def ilookup(V, *args):
+    """
+    lookup indices of names passed as *args in V
+    return a scalar if *args is a singleton, array otherwise
+    """
+    lookup = np.flatnonzero(np.isin(V,args))
+    return lookup[0] if len(lookup)==1 else lookup
+
+#output:
+f'''(
+(Variable, Value)
+hline
+("Lookup one value:", {ilookup(V, "Copperhold")})
+("Lookup multiple values:", {ilookup(V, "Cogburg", "Gizbourne")})
+)'''
+#+end_src
+
+#+RESULTS:
+| Variable                | Value |
+|-------------------------+-------|
+| Lookup one value:       | 1     |
+| Lookup multiple values: | (0 3) |
+
+Get our graph as a sparse weight matrix via the ~csr_matrix~ function ([[https://matteding.github.io/2019/04/25/sparse-matrices/][great blog post about sparse matrix formats]])
+
+#+begin_src python :session _
+matrix = ss.csr_matrix((W, (E[:,0],E[:,1])), shape=(len(V),len(V)))
+
+# output in dense format for readability, use V as header
+[V.tolist(),None] + matrix.todense().tolist()
+#+end_src
+
+#+RESULTS:
+| Cogburg | Copperhold | Endpoint | Gizbourne | Irondale | Isolated | Leverstorm | Rustport | Steamdrift |
+|---------+------------+----------+-----------+----------+----------+------------+----------+------------|
+|       0 |       1047 |        0 |         0 |     1034 |        0 |          0 |        0 |       1269 |
+|       0 |          0 |        0 |         0 |      345 |        0 |        569 |        0 |          0 |
+|       0 |          0 |        0 |         0 |        0 |        0 |          0 |        0 |          0 |
+|       0 |          0 |        0 |         0 |        0 |        0 |          0 |        0 |          0 |
+|       0 |          0 |        0 |       526 |        0 |        0 |          0 |        0 |          0 |
+|       0 |          0 |      569 |         0 |        0 |        0 |          0 |        0 |          0 |
+|       0 |          0 |        0 |       866 |      673 |        0 |          0 |        0 |          0 |
+|    1421 |          0 |        0 |      1220 |     1302 |        0 |          0 |        0 |       1947 |
+|       0 |          0 |        0 |         0 |        0 |        0 |          0 |        0 |          0 |
+
+Finally, the ~shortest_path~ function computes the distance matrix
+and the predecessor matrix encoding shortest paths
+Some distances are infinite, since we added an isolated edge.
+#+begin_src python :kernel katas :session _
+d, pr = ss.csgraph.shortest_path(csgraph=matrix, directed=False, return_predecessors=True)
+
+#output the distance matrix d, use V as header
+[V.tolist(),None] + d.tolist()
+#+end_src
+
+#+RESULTS:
+| Cogburg | Copperhold | Endpoint | Gizbourne | Irondale | Isolated | Leverstorm | Rustport | Steamdrift |
+|---------+------------+----------+-----------+----------+----------+------------+----------+------------|
+|     0.0 |     1047.0 |      inf |    1560.0 |   1034.0 |      inf |     1616.0 |   1421.0 |     1269.0 |
+|  1047.0 |        0.0 |      inf |     871.0 |    345.0 |      inf |      569.0 |   1647.0 |     2316.0 |
+|     inf |        inf |      0.0 |       inf |      inf |    569.0 |        inf |      inf |        inf |
+|  1560.0 |      871.0 |      inf |       0.0 |    526.0 |      inf |      866.0 |   1220.0 |     2829.0 |
+|  1034.0 |      345.0 |      inf |     526.0 |      0.0 |      inf |      673.0 |   1302.0 |     2303.0 |
+|     inf |        inf |    569.0 |       inf |      inf |      0.0 |        inf |      inf |        inf |
+|  1616.0 |      569.0 |      inf |     866.0 |    673.0 |      inf |        0.0 |   1975.0 |     2885.0 |
+|  1421.0 |     1647.0 |      inf |    1220.0 |   1302.0 |      inf |     1975.0 |      0.0 |     1947.0 |
+|  1269.0 |     2316.0 |      inf |    2829.0 |   2303.0 |      inf |     2885.0 |   1947.0 |        0.0 |
+
+The predecessor matrix is a concise way to represent multiple paths at once.
+Every item ~[i,j]~ stores the index of previous vertex on the shortest path from ~i~ to ~j~,
+or a negative value -9999 if no such previous vertex on a path exists.
+For instance, this is the case for simple loop paths (from a node to itself).
+Also, the isolated edge which we added to the graph as an experiment, caused many negative values in the predecessor matrix
+#+begin_src python :session _
+#output pr, using V as header again
+[V.tolist(),None]+pr.tolist()
+#+end_src
+
+#+RESULTS:
+| Cogburg | Copperhold | Endpoint | Gizbourne | Irondale | Isolated | Leverstorm | Rustport | Steamdrift |
+|---------+------------+----------+-----------+----------+----------+------------+----------+------------|
+|   -9999 |          0 |    -9999 |         4 |        0 |    -9999 |          1 |        0 |          0 |
+|       1 |      -9999 |    -9999 |         4 |        1 |    -9999 |          1 |        4 |          0 |
+|   -9999 |      -9999 |    -9999 |     -9999 |    -9999 |        2 |      -9999 |    -9999 |      -9999 |
+|       4 |          4 |    -9999 |     -9999 |        3 |    -9999 |          3 |        3 |          0 |
+|       4 |          4 |    -9999 |         4 |    -9999 |    -9999 |          4 |        4 |          0 |
+|   -9999 |      -9999 |        5 |     -9999 |    -9999 |    -9999 |      -9999 |    -9999 |      -9999 |
+|       1 |          6 |    -9999 |         6 |        6 |    -9999 |      -9999 |        4 |          0 |
+|       7 |          4 |    -9999 |         7 |        7 |    -9999 |          4 |    -9999 |          7 |
+|       8 |          0 |    -9999 |         4 |        0 |    -9999 |          1 |        8 |      -9999 |
+
+To read a path from the predecessor matrix, we define a small recursive function
+#+begin_src python  :session _
+
+def read_path(pr,i,j):
+    """
+    read the path from i to j from a predecessor matrix pr
+    return array of vertex indices
+    """
+    return [] if j<0 else read_path(pr,i,pr[i,j]) + [j]
+#+end_src
+
+Putting it all together:
+#+begin_src python :session _
+a, b = "Cogburg", "Gizbourne"
+
+#ilookup a pair of indices
+ia, ib = ilookup(V, a, b)
+
+
+distance = d[ia][ib]
+path = V[read_path(pr,ia,ib)]
+
+#output distance and path
+f'''(
+(Metric, Value),
+hline
+(Distance, "{distance} km along the shortest path from {a} to {b}"),
+("Shortest path", {path})
+)'''
+#+end_src
+
+#+RESULTS:
+| Metric        | Value                                                       |
+|---------------+-------------------------------------------------------------|
+| Distance      | 1560.0 km along the shortest path from Cogburg to Gizbourne |
+| Shortest path | (Cogburg Irondale Gizbourne)                                |

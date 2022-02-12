@@ -1,0 +1,8 @@
+name: katas
+channels:
+    - conda-forge
+dependencies:
+    - python=3.9
+    - scypi
+    - python-dotenv
+    - ipykernel
